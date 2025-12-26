@@ -68,7 +68,6 @@ import {
   getMessageImages,
   getMessageTextContent,
   isDalle3,
-  isVisionModel,
   safeLocalStorage,
   getModelSizes,
   supportsCustomSize,
@@ -554,7 +553,7 @@ export function ChatActions(props: {
   }, [models, currentModel, currentProviderName]);
   const [showModelSelector, setShowModelSelector] = useState(false);
   const [showPluginSelector, setShowPluginSelector] = useState(false);
-  const [showUploadImage, setShowUploadImage] = useState(false);
+  const [showUploadImage, setShowUploadImage] = useState(true);
 
   const [showSizeSelector, setShowSizeSelector] = useState(false);
   const [showQualitySelector, setShowQualitySelector] = useState(false);
@@ -570,7 +569,7 @@ export function ChatActions(props: {
   const isMobileScreen = useMobileScreen();
 
   useEffect(() => {
-    const show = isVisionModel(currentModel);
+    const show = true; // Always show upload image button
     setShowUploadImage(show);
     if (!show) {
       props.setAttachImages([]);
@@ -1032,6 +1031,7 @@ function _Chat() {
   const isMobileScreen = useMobileScreen();
   const navigate = useNavigate();
   const [attachImages, setAttachImages] = useState<string[]>([]);
+  const [attachFileNames, setAttachFileNames] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
 
   // prompt hints
@@ -1116,6 +1116,7 @@ function _Chat() {
       .onUserInput(userInput, attachImages)
       .then(() => setIsLoading(false));
     setAttachImages([]);
+    setAttachFileNames([]);
     chatStore.setLastInput(userInput);
     setUserInput("");
     setPromptHints([]);
@@ -1512,9 +1513,7 @@ function _Chat() {
   const handlePaste = useCallback(
     async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
       const currentModel = chatStore.currentSession().mask.modelConfig.model;
-      if (!isVisionModel(currentModel)) {
-        return;
-      }
+      // Allow image upload for all models
       const items = (event.clipboardData || window.clipboardData).items;
       for (const item of items) {
         if (item.kind === "file" && item.type.startsWith("image/")) {
@@ -1550,6 +1549,141 @@ function _Chat() {
       }
     },
     [attachImages, chatStore],
+  );
+
+  const getFileIcon = useCallback((fileName: string) => {
+    const ext = fileName.toLowerCase().split(".").pop() || "";
+    const iconMap: Record<string, string> = {
+      // Documents
+      pdf: "📄",
+      doc: "📘",
+      docx: "📘",
+      txt: "📝",
+      rtf: "📝",
+      // Spreadsheets
+      xls: "📊",
+      xlsx: "📊",
+      csv: "📊",
+      // Presentations
+      ppt: "📊",
+      pptx: "📊",
+      // Images
+      jpg: "🖼️",
+      jpeg: "🖼️",
+      png: "🖼️",
+      gif: "🖼️",
+      svg: "🖼️",
+      webp: "🖼️",
+      // Archives
+      zip: "🗜️",
+      rar: "🗜️",
+      "7z": "🗜️",
+      tar: "🗜️",
+      gz: "🗜️",
+      // Code
+      js: "📜",
+      jsx: "📜",
+      ts: "📜",
+      tsx: "📜",
+      py: "🐍",
+      java: "☕",
+      cpp: "📜",
+      c: "📜",
+      html: "🌐",
+      css: "🎨",
+      json: "📋",
+      xml: "📋",
+      // Media
+      mp3: "🎵",
+      mp4: "🎬",
+      avi: "🎬",
+      mov: "🎬",
+      wav: "🎵",
+    };
+    return iconMap[ext] || "📎";
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = useCallback(
+    async (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const files = Array.from(e.dataTransfer.files);
+      console.log(
+        "Files dropped:",
+        files.length,
+        files.map((f) => f.name),
+      );
+
+      if (files.length === 0) {
+        console.log("No files in drop event");
+        return;
+      }
+
+      setUploading(true);
+      const imagesData: string[] = [];
+      const fileNames: string[] = [];
+
+      for (const file of files) {
+        console.log(
+          "Processing file:",
+          file.name,
+          "Type:",
+          file.type,
+          "Size:",
+          file.size,
+        );
+        try {
+          const dataUrl = await uploadImageRemote(file);
+          console.log(
+            "Uploaded file:",
+            file.name,
+            "Data URL:",
+            dataUrl?.substring(0, 50) + "...",
+          );
+          if (dataUrl) {
+            imagesData.push(dataUrl);
+            fileNames.push(file.name);
+          } else {
+            console.warn("No data URL returned for:", file.name);
+          }
+        } catch (error) {
+          console.error("Upload failed for", file.name, ":", error);
+          showToast(`上传失败: ${file.name}`);
+        }
+      }
+
+      setUploading(false);
+      console.log("Upload complete. Total files uploaded:", imagesData.length);
+      console.log(
+        "Current attachImages:",
+        attachImages.length,
+        "New images:",
+        imagesData.length,
+      );
+
+      if (imagesData.length > 0) {
+        const images = [...attachImages, ...imagesData];
+        const names = [...attachFileNames, ...fileNames];
+        const maxImages = 10; // Maximum number of attachments
+        if (images.length > maxImages) {
+          images.splice(maxImages, images.length - maxImages);
+          names.splice(maxImages, names.length - maxImages);
+          showToast(`最多只能附加 ${maxImages} 个文件`);
+        }
+        console.log("Setting attachImages to:", images.length, "items");
+        setAttachImages(images);
+        setAttachFileNames(names);
+      } else {
+        console.warn("No images to attach");
+      }
+    },
+    [attachImages, attachFileNames, setAttachImages, setUploading],
   );
 
   async function uploadImage() {
@@ -1681,7 +1815,12 @@ function _Chat() {
 
   return (
     <>
-      <div className={styles.chat} key={session.id}>
+      <div
+        className={styles.chat}
+        key={session.id}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
         <div className="window-header" data-tauri-drag-region>
           {isMobileScreen && (
             <div className="window-actions">
@@ -2093,20 +2232,165 @@ function _Chat() {
                     fontFamily: config.fontFamily,
                   }}
                 />
+                <input
+                  type="file"
+                  id="file-upload-input"
+                  multiple
+                  style={{ display: "none" }}
+                  onChange={async (e) => {
+                    const files = Array.from(e.target.files || []);
+                    if (files.length === 0) return;
+
+                    setUploading(true);
+                    const imagesData: string[] = [];
+                    const fileNames: string[] = [];
+
+                    for (const file of files) {
+                      try {
+                        const dataUrl = await uploadImageRemote(file);
+                        if (dataUrl) {
+                          imagesData.push(dataUrl);
+                          fileNames.push(file.name);
+                        }
+                      } catch (error) {
+                        console.error("Upload failed:", error);
+                        showToast(`上传失败: ${file.name}`);
+                      }
+                    }
+
+                    setUploading(false);
+                    if (imagesData.length > 0) {
+                      const images = [...attachImages, ...imagesData];
+                      const names = [...attachFileNames, ...fileNames];
+                      setAttachImages(images);
+                      setAttachFileNames(names);
+                    }
+                    // Reset input
+                    e.target.value = "";
+                  }}
+                />
+                <label
+                  htmlFor="file-upload-input"
+                  style={{
+                    position: "absolute",
+                    left: "10px",
+                    bottom: "10px",
+                    cursor: uploading ? "default" : "pointer",
+                    width: "22px",
+                    height: "22px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: "50%",
+                    backgroundColor: uploading ? "#e0e0e0" : "transparent",
+                    border: uploading ? "none" : "1.5px solid #999",
+                    transition: "all 0.2s",
+                    zIndex: 10,
+                  }}
+                  title="添加文件"
+                  onMouseEnter={(e) => {
+                    if (!uploading) {
+                      e.currentTarget.style.backgroundColor = "#f0f0f0";
+                      e.currentTarget.style.borderColor = "#666";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!uploading) {
+                      e.currentTarget.style.backgroundColor = "transparent";
+                      e.currentTarget.style.borderColor = "#999";
+                    }
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: uploading ? "14px" : "18px",
+                      fontWeight: "bold",
+                      color: uploading ? "#666" : "#999",
+                      userSelect: "none",
+                      lineHeight: "1",
+                    }}
+                  >
+                    {uploading ? "⏳" : "+"}
+                  </span>
+                </label>
                 {attachImages.length != 0 && (
                   <div className={styles["attach-images"]}>
+                    {console.log(
+                      "Rendering attachImages:",
+                      attachImages.length,
+                      "items",
+                    )}
                     {attachImages.map((image, index) => {
+                      const isDataImage =
+                        image && image.startsWith("data:image");
+                      const fileName = attachFileNames[index] || "file";
+                      const fileIcon = getFileIcon(fileName);
+                      console.log(
+                        `Image ${index}:`,
+                        isDataImage ? "Data image" : "File/URL",
+                        fileName,
+                      );
                       return (
                         <div
                           key={index}
                           className={styles["attach-image"]}
-                          style={{ backgroundImage: `url("${image}")` }}
+                          style={{
+                            position: "relative",
+                            backgroundColor: isDataImage
+                              ? "transparent"
+                              : "#f0f0f0",
+                            backgroundImage: isDataImage
+                              ? `url("${image}")`
+                              : "none",
+                            backgroundSize: "cover",
+                            backgroundPosition: "center",
+                            display: "flex",
+                            flexDirection: "column",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            padding: "4px",
+                          }}
+                          title={fileName}
                         >
+                          {!isDataImage && (
+                            <>
+                              <div
+                                style={{
+                                  fontSize: "32px",
+                                  userSelect: "none",
+                                  pointerEvents: "none",
+                                  marginBottom: "2px",
+                                }}
+                              >
+                                {fileIcon}
+                              </div>
+                              <div
+                                style={{
+                                  fontSize: "8px",
+                                  color: "#666",
+                                  userSelect: "none",
+                                  pointerEvents: "none",
+                                  maxWidth: "100%",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                  textAlign: "center",
+                                }}
+                              >
+                                {fileName.length > 12
+                                  ? fileName.substring(0, 9) + "..."
+                                  : fileName}
+                              </div>
+                            </>
+                          )}
                           <div className={styles["attach-image-mask"]}>
                             <DeleteImageButton
                               deleteImage={() => {
                                 setAttachImages(
                                   attachImages.filter((_, i) => i !== index),
+                                );
+                                setAttachFileNames(
+                                  attachFileNames.filter((_, i) => i !== index),
                                 );
                               }}
                             />
